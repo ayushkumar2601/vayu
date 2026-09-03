@@ -122,6 +122,7 @@ export default function Home() {
         </header>
 
         <main className="hero">
+          {/* 
           <div className="trust-row anim" style={{ "--d": "0.05s" } as React.CSSProperties}>
             <div className="avatar-group">
               <div className="avatar a1"><i className="fa-brands fa-microsoft"></i></div>
@@ -130,9 +131,10 @@ export default function Home() {
             </div>
             <div className="trust-pill">Trusted by 2000+ Enterprises</div>
           </div>
+          */}
 
           <h1 className="headline">
-            <span className="line anim" style={{ "--d": "0.12s" } as React.CSSProperties}>Intelligence</span><br />
+            <span className="line line1 anim" style={{ "--d": "0.12s" } as React.CSSProperties}>Intelligence</span><br />
             <span className="line anim" style={{ "--d": "0.3s" } as React.CSSProperties}>Designed To Evolve</span>
           </h1>
 

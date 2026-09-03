@@ -3,11 +3,12 @@ import sys
 from pathlib import Path
 
 import click
-from rich.console import Console
+from rich.console import Console, Group
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.text import Text
 from rich.table import Table
+from rich.syntax import Syntax
 
 from crs.core.schemas import CRSRunResult
 from crs.orchestrator import CRSPipeline, PipelineError, NoFindingsError
@@ -35,46 +36,115 @@ ASCII_LOGO = """[bold orange3]
 """
 
 def render_finding(finding):
-    text = Text()
-    text.append(f"ID: ", style="bold")
-    text.append(f"{finding.finding_id}\n", style="cyan")
-    text.append(f"Type: ", style="bold")
-    text.append(f"{finding.vulnerability_type}\n", style="yellow")
+    # Base info table
+    info_table = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
+    info_table.add_column("Key", style="bold white")
+    info_table.add_column("Value")
+    
+    info_table.add_row("ID:", f"[cyan]{finding.finding_id}[/]")
+    info_table.add_row("Type:", f"[yellow]{finding.vulnerability_type}[/]")
+    
     severity = getattr(finding.severity, "value", finding.severity)
     color = "red" if severity == "HIGH" else "yellow"
-    text.append(f"Severity: ", style="bold")
-    text.append(f"{severity}\n", style=color)
-    text.append(f"Location: ", style="bold")
-    text.append(f"{finding.file}:{finding.line_start}", style="white")
-    return Panel(text, title="[bold orange3]1. Vulnerability Detected[/]", border_style="orange3")
+    icon = "✗" if severity == "HIGH" else "⚠"
+    info_table.add_row("Severity:", f"[{color}]{icon} {severity}[/]")
+    info_table.add_row("Location:", f"{finding.file}:{finding.line_start}")
+    
+    elements = [info_table]
+    
+    # Try to extract code snippet
+    if finding.file and finding.line_start:
+        try:
+            with open(finding.file, "r") as f:
+                lines = f.readlines()
+            
+            start_idx = max(0, finding.line_start - 3)
+            end_idx = min(len(lines), finding.line_start + 2)
+            snippet_lines = lines[start_idx:end_idx]
+            code_str = "".join(snippet_lines)
+            
+            syntax = Syntax(
+                code_str,
+                lexer="python",
+                theme="monokai",
+                line_numbers=True,
+                start_line=start_idx + 1,
+                highlight_lines={finding.line_start},
+                background_color="default"
+            )
+            
+            snippet_panel = Panel(syntax, title="[dim]Code Context[/]", border_style="dim")
+            elements.extend([Text(""), snippet_panel])
+        except Exception:
+            pass # Fail gracefully if file can't be read
+            
+    return Panel(
+        Group(*elements), 
+        title="[bold orange3]1. Vulnerability Detected[/]", 
+        border_style="orange3"
+    )
+
 
 def render_reasoning(reasoning):
-    text = Text()
-    text.append(f"Root Cause:\n", style="bold")
-    text.append(f"{reasoning.root_cause}\n\n", style="white")
-    text.append(f"Security Impact:\n", style="bold")
-    text.append(f"{reasoning.security_impact}\n\n", style="white")
-    text.append(f"Remediation Strategy:\n", style="bold")
-    text.append(f"{reasoning.remediation_strategy}\n\n", style="white")
-    text.append(f"Confidence: ", style="bold")
-    text.append(f"{reasoning.confidence:.0%}", style="green")
-    return Panel(text, title="[bold orange3]2. AI Reasoning[/]", border_style="orange3")
+    table = Table(show_header=False, box=None, padding=(0, 2, 1, 0))
+    table.add_column("Icon", justify="center")
+    table.add_column("Content")
+    
+    # Root Cause
+    rc_text = Text()
+    rc_text.append("Root Cause\n", style="bold white")
+    rc_text.append(reasoning.root_cause, style="dim white")
+    table.add_row("[red]✗[/]", rc_text)
+    
+    # Security Impact
+    si_text = Text()
+    si_text.append("Security Impact\n", style="bold white")
+    si_text.append(reasoning.security_impact, style="dim white")
+    table.add_row("[yellow]⚠[/]", si_text)
+    
+    # Remediation
+    rem_text = Text()
+    rem_text.append("Remediation Strategy\n", style="bold white")
+    rem_text.append(reasoning.remediation_strategy, style="dim white")
+    table.add_row("[green]✓[/]", rem_text)
+    
+    # Confidence
+    conf_color = "green" if reasoning.confidence >= 0.8 else "yellow"
+    table.add_row("[cyan]ℹ[/]", f"[bold white]Confidence:[/] [{conf_color}]{reasoning.confidence:.0%}[/]")
+    
+    return Panel(
+        table, 
+        title="[bold orange3]2. AI Reasoning[/]", 
+        border_style="orange3"
+    )
+
 
 def render_patch(patch):
-    text = Text()
-    text.append(f"Target File: ", style="bold")
-    text.append(f"{patch.target_file}\n", style="cyan")
-    text.append(f"Validation: ", style="bold")
-    text.append(f"PASSED\n", style="green")
-    text.append(f"Expected Security Effect:\n", style="bold")
-    text.append(f"{patch.expected_security_effect}", style="white")
-    return Panel(text, title="[bold orange3]3. Patch Generation[/]", border_style="orange3")
+    table = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
+    table.add_column("Icon", justify="center")
+    table.add_column("Content")
+    
+    table.add_row("[cyan]ℹ[/]", f"[bold white]Target File:[/] [cyan]{patch.target_file}[/]")
+    table.add_row("[green]✓[/]", f"[bold white]Validation:[/] [green]PASSED[/]")
+    
+    effect_text = Text()
+    effect_text.append("Expected Security Effect\n", style="bold white")
+    effect_text.append(patch.expected_security_effect, style="dim white")
+    table.add_row("[orange3]⚡[/]", effect_text)
+
+    return Panel(
+        table, 
+        title="[bold orange3]3. Patch Generation[/]", 
+        border_style="orange3"
+    )
+
 
 def _status_color(passed: bool) -> str:
-    return "[bold green]PASSED[/]" if passed else "[bold red]FAILED[/]"
+    return "[bold green]✓ PASSED[/]" if passed else "[bold red]✗ FAILED[/]"
+
 
 def render_verification(verification):
-    table = Table(show_header=False, box=None)
+    table = Table(show_header=False, box=None, padding=(0, 4, 0, 0))
     table.add_column("Check", style="bold white")
     table.add_column("Result", justify="right")
     
@@ -84,18 +154,36 @@ def render_verification(verification):
     table.add_row("Static Rescan", _status_color(verification.static_rescan_clean))
     
     decision_color = "bold green" if verification.approved else "bold red"
-    decision_text = "VERIFIED (Approved for Deployment)" if verification.approved else "REJECTED"
+    decision_icon = "✓" if verification.approved else "✗"
+    decision_text = f"{decision_icon} VERIFIED (Approved for Deployment)" if verification.approved else f"{decision_icon} REJECTED"
     
     text = Text()
     text.append("\nFinal Decision: ", style="bold")
     text.append(decision_text, style=decision_color)
     
     return Panel.fit(
-        table, 
+        Group(table, text),
         title="[bold orange3]4. Formal Verification[/]", 
-        border_style="orange3",
-        subtitle=f"[{decision_color}]{decision_text}[/]"
+        border_style="orange3"
     )
+
+
+def render_actionable_error(title: str, description: str, action: str):
+    """Render a beautiful, actionable error message based on SKILL.md Example 3."""
+    table = Table(show_header=False, box=None, padding=(0, 2, 1, 0))
+    table.add_column("Icon", justify="center")
+    table.add_column("Content")
+    
+    table.add_row("[red]✗[/]", f"[bold white]{description}[/]")
+    table.add_row("", "") # spacer
+    
+    action_text = Text()
+    action_text.append("To fix this, run:\n", style="dim white")
+    action_text.append(f"  {action}", style="bold cyan")
+    
+    table.add_row("[green]✓[/]", action_text)
+    
+    console.print(Panel(table, title=f"[bold red]{title}[/]", border_style="red"))
 
 
 @click.command()
@@ -106,7 +194,11 @@ def main(target_path):
     
     provider = os.environ.get("AIKAVACH_LLM_PROVIDER", "").strip().lower()
     if provider != "ollama":
-        console.print("[bold red]Error:[/] AIKAVACH_LLM_PROVIDER must be set to 'ollama'")
+        render_actionable_error(
+            "Configuration Error",
+            "Environment variables are not loaded or missing.",
+            "source .env.local"
+        )
         sys.exit(1)
         
     try:
@@ -117,7 +209,11 @@ def main(target_path):
             timeout=config.timeout,
         )
     except Exception as e:
-        console.print(f"[bold red]Configuration Error:[/] {e}")
+        render_actionable_error(
+            "Ollama Connection Error",
+            f"Could not connect to Ollama: {str(e)}",
+            "Ensure Ollama is running and the model is pulled (e.g., 'ollama run llama3')"
+        )
         sys.exit(1)
 
     console.print(f"[dim]Model:[/] [orange3]{config.model}[/]\n")
@@ -134,9 +230,12 @@ def main(target_path):
     target_dir = str(Path(target_path).expanduser())
     
     try:
+        # Enhanced progress bar with elapsed time
         with Progress(
             SpinnerColumn(style="orange3"),
             TextColumn("[progress.description]{task.description}"),
+            TextColumn("•"),
+            TimeElapsedColumn(),
             transient=True,
             console=console
         ) as progress:
@@ -148,7 +247,7 @@ def main(target_path):
             
             if not findings:
                 progress.stop()
-                console.print(Panel("[bold green]No vulnerabilities detected.[/]", title="[bold orange3]Scan Complete[/]", border_style="orange3"))
+                console.print(Panel("[bold green]✓ No vulnerabilities detected.[/]", title="[bold orange3]Scan Complete[/]", border_style="orange3"))
                 sys.exit(0)
                 
             finding = findings[0]
@@ -188,8 +287,21 @@ def main(target_path):
             progress.stop()
             console.print(render_verification(verification))
             
-    except (PipelineError, OllamaClientError, ValueError, OSError) as exc:
-        console.print(Panel(f"[bold red]{exc}[/]", title="[bold red]Pipeline Error[/]"))
+    except OllamaClientError as exc:
+        progress.stop()
+        render_actionable_error(
+            "AI Provider Error",
+            f"The LLM provider failed: {str(exc)}",
+            "Check that the model exists locally by running 'ollama list'"
+        )
+        sys.exit(1)
+    except Exception as exc:
+        progress.stop()
+        render_actionable_error(
+            "Pipeline Error",
+            f"An unexpected error occurred during execution:\n{str(exc)}",
+            "Review the target code or restart the process."
+        )
         sys.exit(1)
 
 if __name__ == "__main__":
