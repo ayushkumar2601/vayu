@@ -22,6 +22,7 @@ def test_ollama_demo_forwards_configured_timeout(
 
     monkeypatch.setenv("AIKAVACH_OLLAMA_MODEL", "local-model")
     monkeypatch.setenv("AIKAVACH_OLLAMA_TIMEOUT", "180")
+    monkeypatch.delenv("AIKAVACH_OLLAMA_URL", raising=False)
     monkeypatch.setattr(ollama_demo, "OllamaLLMClient", client_class)
     monkeypatch.setattr(ollama_demo, "RepositoryLoader", Mock(return_value=loader))
     monkeypatch.setattr(ollama_demo, "StaticScanner", Mock(return_value=scanner))

@@ -129,6 +129,7 @@ def test_production_configuration_uses_ollama_timeout(
     monkeypatch.setenv("AIKAVACH_LLM_PROVIDER", "ollama")
     monkeypatch.setenv("AIKAVACH_OLLAMA_MODEL", "local-model")
     monkeypatch.setenv("AIKAVACH_OLLAMA_TIMEOUT", "180")
+    monkeypatch.delenv("AIKAVACH_OLLAMA_URL", raising=False)
     monkeypatch.setattr(demo, "OllamaLLMClient", client_class)
 
     demo.pipeline_from_environment()
