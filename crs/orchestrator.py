@@ -25,7 +25,7 @@ class NoFindingsError(PipelineError):
 
 
 class CRSPipeline:
-    """Compose existing Find, Reason, Patch, and Verify components."""
+    """Compose existing Find, Reason, Patch, and Verify components with retry self-correction."""
 
     def __init__(
         self,
@@ -51,8 +51,8 @@ class CRSPipeline:
             patch_validator=self.patch_validator
         )
 
-    def run(self, repository_root: str) -> CRSRunResult:
-        """Run the complete MVP against one repository without modifying it."""
+    def run(self, repository_root: str, max_retries: int = 1) -> CRSRunResult:
+        """Run the complete pipeline against one repository without modifying it."""
 
         try:
             target = self.repository_loader.load(repository_root)
@@ -71,33 +71,37 @@ class CRSPipeline:
         except Exception as exc:
             raise PipelineError("REASON", str(exc)) from exc
 
-        try:
-            patch = self.patch_generator.generate(
-                finding, reasoning, evidence.code_context
-            )
-            validation = self.patch_validator.validate(
-                patch,
-                finding,
-                repository_root=target.path,
-                intended_file=evidence.code_context.file,
-            )
-            if not validation.valid:
-                raise ValueError(validation.reason or "Patch proposal is invalid")
-        except Exception as exc:
-            raise PipelineError("PATCH", str(exc)) from exc
+        last_error = None
+        for attempt in range(max(1, max_retries)):
+            try:
+                patch = self.patch_generator.generate(
+                    finding, reasoning, evidence.code_context
+                )
+                validation = self.patch_validator.validate(
+                    patch,
+                    finding,
+                    repository_root=target.path,
+                    intended_file=evidence.code_context.file,
+                )
+                if not validation.valid:
+                    raise ValueError(validation.reason or "Patch proposal is invalid")
 
-        try:
-            verification = self.verifier.verify(target.path, finding, patch)
-        except Exception as exc:
-            raise PipelineError("VERIFY", str(exc)) from exc
+                verification = self.verifier.verify(target.path, finding, patch)
+                if verification.approved or attempt == max_retries - 1:
+                    return CRSRunResult(
+                        target=target,
+                        finding=finding,
+                        reasoning=reasoning,
+                        patch=patch,
+                        verification=verification,
+                    )
+                last_error = verification.reason
+            except Exception as exc:
+                last_error = str(exc)
+                if attempt == max_retries - 1:
+                    raise PipelineError("PATCH", str(exc)) from exc
 
-        return CRSRunResult(
-            target=target,
-            finding=finding,
-            reasoning=reasoning,
-            patch=patch,
-            verification=verification,
-        )
+        raise PipelineError("VERIFY", f"Failed after {max_retries} attempts: {last_error}")
 
 
 Orchestrator = CRSPipeline

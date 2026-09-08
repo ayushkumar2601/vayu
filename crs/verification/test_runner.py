@@ -1,10 +1,12 @@
 from __future__ import annotations
-"""Deterministic Python build and project-test execution."""
+"""Deterministic Multi-Language build and project-test execution."""
 
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import subprocess
 import sys
+
+from crs.verification.language_runners import LanguageRunner
 
 
 @dataclass(frozen=True)
@@ -19,7 +21,7 @@ class CheckResult:
 
 
 class TestRunner:
-    """Run Python checks only inside the supplied temporary workspace."""
+    """Run language checks inside the supplied temporary workspace."""
 
     __test__ = False
 
@@ -28,26 +30,51 @@ class TestRunner:
             raise ValueError("Verification timeout must be greater than zero")
         self.timeout = timeout
         self.python_executable = python_executable or sys.executable
+        self.language_runner = LanguageRunner()
 
     def syntax_check(self, workspace_root: str | Path, affected_file: str) -> CheckResult:
         root = Path(workspace_root).resolve()
         target = self._safe_target(root, affected_file)
-        return self._run(
-            [self.python_executable, "-m", "py_compile", str(target)], root
-        )
+        ext = target.suffix.lower()
+
+        if ext == ".py":
+            return self._run(
+                [self.python_executable, "-m", "py_compile", str(target)], root
+            )
+        elif ext in (".js", ".ts"):
+            if (root / "package.json").exists():
+                return self._run(["npm", "run", "build"], root)
+            return CheckResult(passed=True, reason="No package.json build script")
+        elif ext == ".go":
+            return self._run(["go", "build", "./..."], root)
+        elif ext == ".rs":
+            return self._run(["cargo", "check"], root)
+
+        return CheckResult(passed=True, reason=f"Syntax check skipped for {ext}")
 
     def run_tests(self, workspace_root: str | Path) -> CheckResult:
         root = Path(workspace_root).resolve()
-        tests = root / "tests"
-        if not tests.is_dir():
-            return CheckResult(
-                passed=True,
-                skipped=True,
-                reason="No project tests found; treated as neutral for MVP verification",
+        detected = self.language_runner.detect_languages(root)
+        primary_lang = detected[0] if detected else "python"
+
+        if primary_lang == "python":
+            tests = root / "tests"
+            if not tests.is_dir():
+                return CheckResult(
+                    passed=True,
+                    skipped=True,
+                    reason="No project tests found; treated as neutral for MVP verification",
+                )
+            return self._run(
+                [self.python_executable, "-m", "pytest", str(tests)], root
             )
-        return self._run(
-            [self.python_executable, "-m", "pytest", str(tests)], root
-        )
+        else:
+            result = self.language_runner.run_tests(root, primary_lang)
+            return CheckResult(
+                passed=result.tests_passed,
+                reason=result.details or f"Language tests completed for {primary_lang}",
+                stdout=result.details,
+            )
 
     def _run(self, command: list[str], cwd: Path) -> CheckResult:
         try:
